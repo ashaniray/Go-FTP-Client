@@ -9,28 +9,20 @@
 
 // TODO: Code is incomplete......
 
-package main
+package ftp
 
 import ("fmt"
-	"flag"
 	"net"
 	"os"
 	"bufio"
-	"strconv"
 	"strings"
 	)
 
-var svr = flag.String("s", "127.0.0.1", "host")
-var port = flag.Int("x", 21, "port")
-var login = flag.String("u", "user", "your login id")
-var passwd = flag.String("p", "guest", "your password")
-
 var NEWLINE string = "\r\n"
-var PROMPT string = "> "
 
-func recvCtrlResp(conn net.Conn) (os.Error, int, string) {
+func RecvCtrlResp(conn *net.Conn) (os.Error, int, string) {
 	var code int = -1
-	r := bufio.NewReader(bufio.NewReader(conn))
+	r := bufio.NewReader(bufio.NewReader(*conn))
 	resp, err := r.ReadString('\n')
 	if err == nil {
 		fmt.Sscanf(resp, "%d", &code);
@@ -38,114 +30,76 @@ func recvCtrlResp(conn net.Conn) (os.Error, int, string) {
 	return err, code, resp;
 }
 
-func sendCtrlCmd(conn net.Conn, req string) (os.Error) {
-	w := bufio.NewWriter(bufio.NewWriter(conn))
+func SendCtrlCmd(conn *net.Conn, req string) (os.Error) {
+	w := bufio.NewWriter(bufio.NewWriter(*conn))
 	w.WriteString(req + NEWLINE)
 	error := w.Flush()
 	return error
 }
 
-func execQuit (conn net.Conn, req string ) (bool, os.Error, string) {
+func ExecQuit (conn *net.Conn, req string ) (bool, os.Error, string) {
 	var resp string
-	err := sendCtrlCmd(conn, "QUIT");
+	err := SendCtrlCmd(conn, "QUIT");
 	if err == nil {
-		err, _, resp = recvCtrlResp(conn)
+		err, _, resp = RecvCtrlResp(conn)
 	}
 	return false, err, resp
 }
 
-func execPass (conn net.Conn, cmd string) (bool, os.Error, string) {
+func ExecPass (conn *net.Conn, cmd string) (bool, os.Error, string) {
 	var resp string
-	err := sendCtrlCmd(conn, cmd)
+	err := SendCtrlCmd(conn, "PASS " + cmd)
 	if err == nil {
-		err, _, resp = recvCtrlResp(conn)
+		err, _, resp = RecvCtrlResp(conn)
 	}
 	return true, err, resp
 }
 
-func execUser (conn net.Conn, cmd string) (bool, os.Error, string) {
+func ExecUser (conn *net.Conn, cmd string) (bool, os.Error, string) {
 	var resp string
-	err := sendCtrlCmd(conn, cmd)
+	err := SendCtrlCmd(conn, "USER " + cmd)
 	if err == nil {
-		err, _, resp = recvCtrlResp(conn)
+		err, _, resp = RecvCtrlResp(conn)
 	}
 	return true, err, resp
 }
 
-func execDefault (conn net.Conn, cmd string) (bool, os.Error, string) {
+func ExecDefault (conn *net.Conn, cmd string) (bool, os.Error, string) {
 	return true, nil, "Invalid Command" + NEWLINE
 }
 
 // The main table
 // Key is the command line command
-// Value is the function (command pattern) to execute against the command
+// Value is the function (command pattern) to Execute against the command
 // Arguments of the function:
 // conn -> Control Connection to ftp server
-// cmd -> the command line provided
+// cmd -> the command line args provided
 // Return values:
-// bool -> true, unless the main loop needs to quit
+// bool -> true, unless the connection is snapped by QUIT
 // os.Error -> the error
 // string -> the string to be returned and displayed to user
-var cmdTable = map [string] func(net.Conn, string) (bool, os.Error, string) {
-	"QUIT" : execQuit,
-	"PASS" : execPass,
-	"USER" : execUser,
+var cmdTable = map [string] func(*net.Conn, string) (bool, os.Error, string) {
+	"QUIT" : ExecQuit,
+	"PASS" : ExecPass,
+	"USER" : ExecUser,
 	// Add more commands here
 }
 
-func execCmd(conn net.Conn, cmd string) (bool, string) {
+func ExecCmd(conn *net.Conn, cmd string) (bool, string) {
 	var resp string
 	var cont bool = true
 
 	tokens := strings.SplitAfter(cmd, " ", 2)
 	key := strings.Trim(strings.ToUpper(tokens[0]), " \t\r\n")
-
+	args := ""
+	if (len(tokens) > 1) {
+		args = tokens[1]
+	}
 	if f, ok := cmdTable[key]; ok {
-		cont, _, resp = f(conn, cmd)
+		cont, _, resp = f(conn, args)
 	} else {
-		cont, _, resp = execDefault(conn, cmd)
+		cont, _, resp = ExecDefault(conn, cmd)
 	}
 	return cont, resp
-}
-
-func main() {
-
-	flag.Parse()
-	address := *svr + ":" + strconv.Itoa(*port);
-
-	fmt.Println("Connecting to " + address);
-	conn, error := net.Dial("tcp", "", address);
-	if error != nil { fmt.Printf("Error: %s\n", error ); os.Exit(1); }
-	defer conn.Close();
-
-	_, _, response := recvCtrlResp(conn);
-
-	var userMsg string = "USER " + *login;
-	fmt.Println(PROMPT + userMsg);
-	_, error, response = execUser(conn, userMsg)
-	if error != nil { fmt.Printf("Error : %s while sending %s\n", error, userMsg ); os.Exit(2); }
-	fmt.Print(response);
-
-	var passMsg string = "PASS " + *passwd;
-	fmt.Println(PROMPT + passMsg);
-	_, error, response = execPass(conn, passMsg)
-	if error != nil { fmt.Printf("Error : %s while sending %d\n", error, passMsg ); os.Exit(2); }
-	fmt.Print(response);
-
-
-	cin := bufio.NewReader(os.Stdin)
-	cont := true
-	var resp, cmd string
-	for cont {
-		fmt.Print(PROMPT)
-		cmd, error = cin.ReadString('\n')
-		if error != nil {
-			fmt.Printf("Error : %s \n", error );
-			break
-		}
-		cont, resp = execCmd(conn, cmd);
-		fmt.Print(resp)
-	}
-	conn.Close();
 }
 
