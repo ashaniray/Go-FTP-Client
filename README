@@ -2,5 +2,8 @@ TODO:
 1. Add commands for Login - Done
 2. Add commands for directory listing - Done
 3. Add commands for file transfer - Done
-4. Add commands to change directory - In Progress
+4. Add commands to change directory - TODO
 5. Add commands to quit - Done
+6. Prepare standard interface - TODO
+7. Add both sync and async menthods to interface - TODO
+
