@@ -7,7 +7,8 @@
 // Description: Go FTP Client
 
 
-// TODO: Code is in Progress......
+// TODO: Remove the multiple returns from function and have a single return
+// whereever possible
 
 package ftp
 
@@ -179,6 +180,25 @@ func recvDataToFile (ip string, port uint, fileName string, c chan string) {
 	c <-"C"
 }
 
+func getPasvIpPort (conn *net.Conn) (ip string, port uint, resp string, err os.Error) {
+	err = SendCtrlCmd(conn, "PASV")
+	if err != nil {
+		return
+	}
+	var code int
+	err, code, resp = RecvCtrlResp(conn)
+	if err != nil {
+		return
+	}
+	if code != 227 {
+		err = os.NewError("Code Returned from server for PASV is not 227")
+		return
+	}
+
+	ip, port, err = getIpPort(resp)
+	return
+}
+
 func ExecGet (conn *net.Conn, file string) (bool, os.Error, string) {
 	err := SendCtrlCmd(conn, "PASV")
 	if err != nil {
@@ -294,19 +314,7 @@ func ExecPut (conn *net.Conn, file string) (bool, os.Error, string) {
 
 
 func ExecList (conn *net.Conn, file string) (bool, os.Error, string) {
-	err := SendCtrlCmd(conn, "PASV")
-	if err != nil {
-		return true, err, ""
-	}
-	err, code, resp := RecvCtrlResp(conn)
-	if err != nil {
-		return true, err, resp
-	}
-	if code != 227 {
-		return true, err, resp
-	}
-
-	ip, port, err := getIpPort(resp)
+	ip, port, resp, err := getPasvIpPort(conn)
 	if err != nil {
 		return true, err, resp
 	}
@@ -326,7 +334,7 @@ func ExecList (conn *net.Conn, file string) (bool, os.Error, string) {
 		return true, err, ""
 	}
 	var respThis string
-	err, code, respThis = RecvCtrlResp(conn)
+	err, _, respThis = RecvCtrlResp(conn)
 	resp += respThis
 	if err != nil {
 		return true, err, resp
@@ -339,9 +347,13 @@ func ExecList (conn *net.Conn, file string) (bool, os.Error, string) {
 		status =<-ch
 	}
 
+	err, _, respThis = RecvCtrlResp(conn)
+	resp += respThis
+
 	if status != "C" {
 		return true, os.NewError(status), resp
 	}
+
 	return true, err, resp
 }
 
