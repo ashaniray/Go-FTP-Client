@@ -88,6 +88,51 @@ func getIpPort(resp string) (ip string, port uint, err os.Error) {
 	return ip, port, nil
 }
 
+func storeDataToFile (ip string, port uint, fileName string, c chan string) {
+	address := ip + ":" + strconv.Uitoa(port);
+
+	conn, error := net.Dial("tcp", "", address);
+	defer conn.Close();
+	if error == nil {
+		c <- "s"
+	} else {
+		c <- "e"
+		return
+	}
+	<-c
+	f, err := os.Open(fileName, os.O_RDONLY, 0666)
+	defer f.Close()
+	if err != nil {
+		msg := fmt.Sprintf("Cannot open file '%s': %v", fileName, err)
+		c <-msg
+		return
+	}
+
+	// Buffer for reading from file
+	bufLen := 1024
+	buf := make([]byte, bufLen)
+
+	// Read from the server and write the contents to a file
+	for {
+		count, err := f.Read(buf)
+		if err == os.EOF {
+			break
+		}
+		if err != nil {
+			msg := fmt.Sprintf("%v", err)
+			c <-msg
+			break
+		}
+		_, err = conn.Write(buf[0:count])
+		if err != nil {
+			msg := fmt.Sprintf("Coudn't write to file, '%s'. Error: %v", fileName, err)
+			c <-msg
+			return
+		}
+	}
+	c <-"C"
+}
+
 func recvDataToFile (ip string, port uint, fileName string, c chan string) {
 	address := ip + ":" + strconv.Uitoa(port);
 	conn, error := net.Dial("tcp", "", address);
@@ -203,6 +248,144 @@ func ExecAscii (conn *net.Conn, cmd string) (bool, os.Error, string) {
 	return true, err, resp
 }
 
+func ExecPut (conn *net.Conn, file string) (bool, os.Error, string) {
+	err := SendCtrlCmd(conn, "PASV")
+	if err != nil {
+		return true, err, ""
+	}
+	err, code, resp := RecvCtrlResp(conn)
+	if err != nil {
+		return true, err, resp
+	}
+	if code != 227 {
+		return true, err, resp
+	}
+
+	ip, port, err := getIpPort(resp)
+	if err != nil {
+		return true, err, resp
+	}
+
+	ch := make (chan string)
+	go storeDataToFile(ip, port, file, ch)
+	start := <-ch
+	if start == "e" {
+		msg := "Unable to connected to server is PASV port"
+		return true, os.NewError(msg), ""
+	}
+	// Our socket connected to remote
+	err = SendCtrlCmd(conn, "STOR " + file)
+	err, code, resp = RecvCtrlResp(conn)
+	if err != nil || code != 150 {
+		return true, err, resp
+	}
+	ch <- "S"
+	recvMsg := <-ch
+	if recvMsg != "C" {
+		err = os.NewError(recvMsg)
+	} else {
+		var respT string
+		err, _, respT = RecvCtrlResp(conn)
+		resp += respT
+	}
+
+	return true, err, resp
+}
+
+
+func ExecList (conn *net.Conn, file string) (bool, os.Error, string) {
+	err := SendCtrlCmd(conn, "PASV")
+	if err != nil {
+		return true, err, ""
+	}
+	err, code, resp := RecvCtrlResp(conn)
+	if err != nil {
+		return true, err, resp
+	}
+	if code != 227 {
+		return true, err, resp
+	}
+
+	ip, port, err := getIpPort(resp)
+	if err != nil {
+		return true, err, resp
+	}
+
+	ch := make (chan string)
+	msgCh := make (chan string)
+
+	go getDirList(ip, port, ch, msgCh)
+	status := <-ch
+	if status == "e" {
+		msg := "Unable to connected to server is PASV port"
+		return true, os.NewError(msg), ""
+	}
+
+	err = SendCtrlCmd(conn, "LIST")
+	if err != nil {
+		return true, err, ""
+	}
+	var respThis string
+	err, code, respThis = RecvCtrlResp(conn)
+	resp += respThis
+	if err != nil {
+		return true, err, resp
+	}
+
+	status =<-ch
+	for status == "c" {
+		recvd := <-msgCh
+		resp += recvd
+		status =<-ch
+	}
+
+	if status != "C" {
+		return true, os.NewError(status), resp
+	}
+	return true, err, resp
+}
+
+
+
+func getDirList (ip string, port uint, c chan string, msg chan string) {
+	address := ip + ":" + strconv.Uitoa(port);
+	conn, error := net.Dial("tcp", "", address);
+	defer conn.Close();
+	if error == nil {
+		c <- "s"
+	} else {
+		c <- "e"
+		return
+	}
+
+	// Read from socket and redirect to file
+	bufLen := 1024
+	buf := make([]byte, bufLen)
+
+	// Read from the server and write the contents to channel
+	for {
+		bytesRead, err := conn.Read(buf)
+		if bytesRead > 0 {
+			c <-"c"
+			msg <- string(buf[0:bytesRead])
+			if err != nil {
+				msg := fmt.Sprintf("Error: %v", err)
+				c <-msg
+				return
+			}
+		}
+		if err == os.EOF {
+			break
+		}
+		if err != nil {
+			msg := fmt.Sprintf("%v", err)
+			c <-msg
+		}
+	}
+	c <-"C"
+	return
+}
+
 
 // The main table
 // Key is the command line command
@@ -221,6 +404,8 @@ var cmdTable = map [string] func(*net.Conn, string) (bool, os.Error, string) {
 	"GET"  : ExecGet,
 	"ASCII": ExecAscii,
 	"BIN"  : ExecBinary,
+	"PUT"  : ExecPut,
+	"LIST" : ExecList,
 	// Add more commands here
 }
 
