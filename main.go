@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strconv"
 	"bufio"
-	"./ftp"
 	)
 
 
@@ -24,20 +23,20 @@ func main() {
 	address := *svr + ":" + strconv.Itoa(*port);
 
 	fmt.Println("Connecting to " + address);
-	conn, error := net.Dial("tcp", "", address);
+	conn, error := net.Dial("tcp", address);
 	if error != nil { fmt.Printf("Error: %s\n", error ); os.Exit(1); }
 	defer conn.Close();
 
-	_, _, response := ftp.RecvCtrlResp(&conn);
+	_, _, response := RecvCtrlResp(&conn);
 
-	_, error, response = ftp.ExecUser(&conn, *login)
+	_, error, response = ExecUser(&conn, *login)
 	if error != nil {
 		fmt.Printf("Error : %s while sending USER %s\n", error, *login );
 		os.Exit(2);
 	}
 	//fmt.Print(response);
 
-	_, error, response = ftp.ExecPass(&conn, *passwd)
+	_, error, response = ExecPass(&conn, *passwd)
 	if error != nil {
 		fmt.Printf("Error : %s while sending passwd\n", error);
 		os.Exit(2);
@@ -54,7 +53,7 @@ func main() {
 			fmt.Printf("Error : %s \n", error );
 			break
 		}
-		cont, resp = ftp.ExecCmd(&conn, cmd);
+		cont, resp = ExecCmd(&conn, cmd);
 		fmt.Print(resp)
 	}
 	conn.Close();

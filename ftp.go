@@ -10,7 +10,7 @@
 // TODO: Remove the multiple returns from function and have a single return
 // whereever possible
 
-package ftp
+package main
 
 import ("fmt"
 	"net"
@@ -19,11 +19,14 @@ import ("fmt"
 	"strings"
 	"regexp"
 	"strconv"
+  "errors"
+  "io"
+  "syscall"
 	)
 
 var NEWLINE string = "\r\n"
 
-func RecvCtrlResp(conn *net.Conn) (os.Error, int, string) {
+func RecvCtrlResp(conn *net.Conn) (error, int, string) {
 	var code int = -1
 	r := bufio.NewReader(bufio.NewReader(*conn))
 	resp, err := r.ReadString('\n')
@@ -33,14 +36,14 @@ func RecvCtrlResp(conn *net.Conn) (os.Error, int, string) {
 	return err, code, resp;
 }
 
-func SendCtrlCmd(conn *net.Conn, req string) (os.Error) {
+func SendCtrlCmd(conn *net.Conn, req string) (error) {
 	w := bufio.NewWriter(bufio.NewWriter(*conn))
 	w.WriteString(req + NEWLINE)
 	error := w.Flush()
 	return error
 }
 
-func ExecQuit (conn *net.Conn, req string ) (bool, os.Error, string) {
+func ExecQuit (conn *net.Conn, req string ) (bool, error, string) {
 	var resp string
 	err := SendCtrlCmd(conn, "QUIT");
 	if err == nil {
@@ -49,7 +52,7 @@ func ExecQuit (conn *net.Conn, req string ) (bool, os.Error, string) {
 	return false, err, resp
 }
 
-func ExecPass (conn *net.Conn, cmd string) (bool, os.Error, string) {
+func ExecPass (conn *net.Conn, cmd string) (bool, error, string) {
 	var resp string
 	err := SendCtrlCmd(conn, "PASS " + cmd)
 	if err == nil {
@@ -58,7 +61,7 @@ func ExecPass (conn *net.Conn, cmd string) (bool, os.Error, string) {
 	return true, err, resp
 }
 
-func ExecUser (conn *net.Conn, cmd string) (bool, os.Error, string) {
+func ExecUser (conn *net.Conn, cmd string) (bool, error, string) {
 	var resp string
 	err := SendCtrlCmd(conn, "USER " + cmd)
 	if err == nil {
@@ -67,7 +70,7 @@ func ExecUser (conn *net.Conn, cmd string) (bool, os.Error, string) {
 	return true, err, resp
 }
 
-func getIpPort(resp string) (ip string, port uint, err os.Error) {
+func getIpPort(resp string) (ip string, port uint64, err error) {
 	portRegex:= "([0-9]+,[0-9]+,[0-9]+,[0-9]+),([0-9]+,[0-9]+)"
 	re, err := regexp.Compile(portRegex)
 	if err != nil {
@@ -76,23 +79,23 @@ func getIpPort(resp string) (ip string, port uint, err os.Error) {
 	match := re.FindStringSubmatch(resp)
 	if len(match) != 3 {
 		msg := "Cannot handle server response: " + resp
-		return "", 0, os.NewError(msg)
+		return "", 0, errors.New(msg)
 	}
 
 	ip = strings.Replace(match[1], ",", ".", -1)
 
-	octets := strings.Split(match[2], ",", 2)
-	firstOctet, _ := strconv.Atoui(octets[0])
-	secondOctet, _ := strconv.Atoui(octets[1])
+	octets := strings.SplitN(match[2], ",", 2)
+	firstOctet, _ := strconv.ParseUint(octets[0], 10, 0)
+	secondOctet, _ := strconv.ParseUint(octets[1], 10, 0)
 	port = firstOctet*256 + secondOctet
 
 	return ip, port, nil
 }
 
-func storeDataToFile (ip string, port uint, fileName string, c chan string) {
-	address := ip + ":" + strconv.Uitoa(port);
+func storeDataToFile (ip string, port uint64, fileName string, c chan string) {
+	address := ip + ":" + strconv.FormatUint(uint64(port), 10);
 
-	conn, error := net.Dial("tcp", "", address);
+	conn, error := net.Dial("tcp", address);
 	defer conn.Close();
 	if error == nil {
 		c <- "s"
@@ -101,7 +104,7 @@ func storeDataToFile (ip string, port uint, fileName string, c chan string) {
 		return
 	}
 	<-c
-	f, err := os.Open(fileName, os.O_RDONLY, 0666)
+	f, err := os.Open(fileName)
 	defer f.Close()
 	if err != nil {
 		msg := fmt.Sprintf("Cannot open file '%s': %v", fileName, err)
@@ -116,7 +119,7 @@ func storeDataToFile (ip string, port uint, fileName string, c chan string) {
 	// Read from the server and write the contents to a file
 	for {
 		count, err := f.Read(buf)
-		if err == os.EOF {
+		if err == io.EOF {
 			break
 		}
 		if err != nil {
@@ -134,9 +137,9 @@ func storeDataToFile (ip string, port uint, fileName string, c chan string) {
 	c <-"C"
 }
 
-func recvDataToFile (ip string, port uint, fileName string, c chan string) {
-	address := ip + ":" + strconv.Uitoa(port);
-	conn, error := net.Dial("tcp", "", address);
+func recvDataToFile (ip string, port uint64, fileName string, c chan string) {
+	address := ip + ":" + strconv.FormatUint(uint64(port), 10);
+	conn, error := net.Dial("tcp", address);
 	defer conn.Close();
 	if error == nil {
 		c <- "s"
@@ -146,7 +149,7 @@ func recvDataToFile (ip string, port uint, fileName string, c chan string) {
 	}
 
 	// Read from socket and redirect to file
-	f, err := os.Open(fileName, os.O_CREAT|os.O_WRONLY, 0666)
+	f, err := os.OpenFile(fileName, syscall.O_CREAT|syscall.O_WRONLY, 0666)
 	defer f.Close()
 	if err != nil {
 		msg := fmt.Sprintf("Cannot open file '%s': %v", fileName, err)
@@ -169,7 +172,7 @@ func recvDataToFile (ip string, port uint, fileName string, c chan string) {
 				return
 			}
 		}
-		if err == os.EOF {
+		if err == io.EOF {
 			break
 		}
 		if err != nil {
@@ -180,7 +183,7 @@ func recvDataToFile (ip string, port uint, fileName string, c chan string) {
 	c <-"C"
 }
 
-func getPasvIpPort (conn *net.Conn) (ip string, port uint, resp string, err os.Error) {
+func getPasvIpPort (conn *net.Conn) (ip string, port uint64, resp string, err error) {
 	err = SendCtrlCmd(conn, "PASV")
 	if err != nil {
 		return
@@ -191,7 +194,7 @@ func getPasvIpPort (conn *net.Conn) (ip string, port uint, resp string, err os.E
 		return
 	}
 	if code != 227 {
-		err = os.NewError("Code Returned from server for PASV is not 227")
+		err = errors.New("Code Returned from server for PASV is not 227")
 		return
 	}
 
@@ -199,7 +202,7 @@ func getPasvIpPort (conn *net.Conn) (ip string, port uint, resp string, err os.E
 	return
 }
 
-func ExecGet (conn *net.Conn, file string) (bool, os.Error, string) {
+func ExecGet (conn *net.Conn, file string) (bool, error, string) {
 	err := SendCtrlCmd(conn, "PASV")
 	if err != nil {
 		return true, err, ""
@@ -222,7 +225,7 @@ func ExecGet (conn *net.Conn, file string) (bool, os.Error, string) {
 	start := <-ch
 	if start == "e" {
 		msg := "Unable to connected to server is PASV port"
-		return true, os.NewError(msg), ""
+		return true, errors.New(msg), ""
 	}
 	err = SendCtrlCmd(conn, "RETR " + file)
 	err, _, resp = RecvCtrlResp(conn)
@@ -231,7 +234,7 @@ func ExecGet (conn *net.Conn, file string) (bool, os.Error, string) {
 	}
 	recvMsg := <-ch
 	if recvMsg != "C" {
-		err = os.NewError(recvMsg)
+		err = errors.New(recvMsg)
 	} else {
 		var respT string
 		err, _, respT = RecvCtrlResp(conn)
@@ -241,7 +244,7 @@ func ExecGet (conn *net.Conn, file string) (bool, os.Error, string) {
 	return true, err, resp
 }
 
-func ExecDefault (conn *net.Conn, cmd string) (bool, os.Error, string) {
+func ExecDefault (conn *net.Conn, cmd string) (bool, error, string) {
 	resp := "Invalid Command. Valid Commands are:" + NEWLINE
 	for k, _ := range cmdTable {
 		resp = resp + k + " "
@@ -250,7 +253,7 @@ func ExecDefault (conn *net.Conn, cmd string) (bool, os.Error, string) {
 	return true, nil, resp
 }
 
-func ExecBinary (conn *net.Conn, cmd string) (bool, os.Error, string) {
+func ExecBinary (conn *net.Conn, cmd string) (bool, error, string) {
 	var resp string
 	err := SendCtrlCmd(conn, "TYPE I" + cmd)
 	if err == nil {
@@ -259,7 +262,7 @@ func ExecBinary (conn *net.Conn, cmd string) (bool, os.Error, string) {
 	return true, err, resp
 }
 
-func ExecAscii (conn *net.Conn, cmd string) (bool, os.Error, string) {
+func ExecAscii (conn *net.Conn, cmd string) (bool, error, string) {
 	var resp string
 	err := SendCtrlCmd(conn, "TYPE A" + cmd)
 	if err == nil {
@@ -268,7 +271,7 @@ func ExecAscii (conn *net.Conn, cmd string) (bool, os.Error, string) {
 	return true, err, resp
 }
 
-func ExecPut (conn *net.Conn, file string) (bool, os.Error, string) {
+func ExecPut (conn *net.Conn, file string) (bool, error, string) {
 	err := SendCtrlCmd(conn, "PASV")
 	if err != nil {
 		return true, err, ""
@@ -291,7 +294,7 @@ func ExecPut (conn *net.Conn, file string) (bool, os.Error, string) {
 	start := <-ch
 	if start == "e" {
 		msg := "Unable to connected to server is PASV port"
-		return true, os.NewError(msg), ""
+		return true, errors.New(msg), ""
 	}
 	// Our socket connected to remote
 	err = SendCtrlCmd(conn, "STOR " + file)
@@ -302,7 +305,7 @@ func ExecPut (conn *net.Conn, file string) (bool, os.Error, string) {
 	ch <- "S"
 	recvMsg := <-ch
 	if recvMsg != "C" {
-		err = os.NewError(recvMsg)
+		err = errors.New(recvMsg)
 	} else {
 		var respT string
 		err, _, respT = RecvCtrlResp(conn)
@@ -313,7 +316,7 @@ func ExecPut (conn *net.Conn, file string) (bool, os.Error, string) {
 }
 
 
-func ExecList (conn *net.Conn, file string) (bool, os.Error, string) {
+func ExecList (conn *net.Conn, file string) (bool, error, string) {
 	ip, port, resp, err := getPasvIpPort(conn)
 	if err != nil {
 		return true, err, resp
@@ -326,7 +329,7 @@ func ExecList (conn *net.Conn, file string) (bool, os.Error, string) {
 	status := <-ch
 	if status == "e" {
 		msg := "Unable to connected to server is PASV port"
-		return true, os.NewError(msg), ""
+		return true, errors.New(msg), ""
 	}
 
 	err = SendCtrlCmd(conn, "LIST")
@@ -351,7 +354,7 @@ func ExecList (conn *net.Conn, file string) (bool, os.Error, string) {
 	resp += respThis
 
 	if status != "C" {
-		return true, os.NewError(status), resp
+		return true, errors.New(status), resp
 	}
 
 	return true, err, resp
@@ -359,9 +362,9 @@ func ExecList (conn *net.Conn, file string) (bool, os.Error, string) {
 
 
 
-func getDirList (ip string, port uint, c chan string, msg chan string) {
-	address := ip + ":" + strconv.Uitoa(port);
-	conn, error := net.Dial("tcp", "", address);
+func getDirList (ip string, port uint64, c chan string, msg chan string) {
+	address := ip + ":" + strconv.FormatUint(uint64(port), 10);
+	conn, error := net.Dial("tcp", address);
 	defer conn.Close();
 	if error == nil {
 		c <- "s"
@@ -386,7 +389,7 @@ func getDirList (ip string, port uint, c chan string, msg chan string) {
 				return
 			}
 		}
-		if err == os.EOF {
+		if err == io.EOF {
 			break
 		}
 		if err != nil {
@@ -407,9 +410,9 @@ func getDirList (ip string, port uint, c chan string, msg chan string) {
 // cmd -> the command line args provided
 // Return values:
 // bool -> true, unless the connection is snapped by QUIT
-// os.Error -> the error
+// error -> the error
 // string -> the string to be returned and displayed to user
-var cmdTable = map [string] func(*net.Conn, string) (bool, os.Error, string) {
+var cmdTable = map [string] func(*net.Conn, string) (bool, error, string) {
 	"QUIT" : ExecQuit,
 	"PASS" : ExecPass,
 	"USER" : ExecUser,
@@ -427,7 +430,7 @@ func ExecCmd(conn *net.Conn, line string) (bool, string) {
 
 	cmd := strings.Trim(line, " \t\r\n")
 
-	tokens := strings.SplitAfter(cmd, " ", 2)
+	tokens := strings.SplitAfterN(cmd, " ", 2)
 	key := strings.Trim(strings.ToUpper(tokens[0]), " \t\r\n")
 	args := ""
 	if (len(tokens) > 1) {
